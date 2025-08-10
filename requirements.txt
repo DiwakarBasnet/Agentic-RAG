@@ -1,0 +1,8 @@
+PyMuPDF
+camelot-py[cv]
+pandas
+weaviate-client
+opencv-python
+sentence-transformers
+unstructured[pdf]
+pdfplumber
