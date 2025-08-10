@@ -1,6 +1,22 @@
 from sentence_transformers import SentenceTransformer
+from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
+
+@dataclass
+class TableResult:
+    table_id: str
+    csv_file_path: str
+    page_summary: str
+    page_number: int
+    source_file: str
+    certainty: float
+
+@dataclass
+class RAGAnswer:
+    thinking: str
+    answer: str
+    raw_answer: str
 
 def create_simplified_metadata(tables, pdf_path, saved_files, page_summaries):
     metadata_list = []

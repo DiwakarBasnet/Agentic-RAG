@@ -1,15 +1,20 @@
+import os
+from dotenv import load_dotenv
 from pathlib import Path
+
+load_dotenv()
 
 # Paths
 OUTPUT_DIR = Path("data/outputs/table_data")
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Weaviate configuration
-WEAVIATE_URL = "https://6rbkz8vnqryn3yw5qtqkpg.c0.asia-southeast1.gcp.weaviate.cloud"
-WEAVIATE_API_KEY = "U1U3TkVDalVKOGxZQmdicV9TT2xWeElSS0IvK2dKTlJLTk1zYXFoSDVDWmdtZDgxYWRJeVYrZHJpMUJVPV92MjAw"
+WEAVIATE_URL = os.getenv('WEAVIATE_URL')
+WEAVIATE_API_KEY = os.getenv('WEAVIATE_API_KEY')
+WEAVIATE_CLASS = os.getenv('WEAVIATE_CLASS')
 
-# Class name for storing metadata
-WEAVIATE_CLASS = "PDFTableMetadata"
+# Models
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+MULTI_MODAL_MODEL = "Salesforce/blip-image-captioning-large"
+LLM_MODEL = "Gensyn/Qwen2.5-0.5B-Instruct"
+HF_TOKEN = os.getenv('HF_TOKEN')
 
-# Multi modal model
-BLIP_MODEL = "Salesforce/blip-image-captioning-large"

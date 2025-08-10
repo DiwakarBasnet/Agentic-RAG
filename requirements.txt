@@ -11,3 +11,7 @@ pillow
 transformers
 torch
 torchvision
+python-dotenv
+langchain
+langchain-community
+langchain-weaviate

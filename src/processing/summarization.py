@@ -1,4 +1,3 @@
-# summarization.py
 from transformers import BlipProcessor, BlipForConditionalGeneration
 import fitz
 from PIL import Image
@@ -33,7 +32,7 @@ class BLIPSummarizer:
         if prompt is None:
             prompt = (
                 "Summarize the financial data on this page: tables, numeric values, and key takeaways. "
-                "Output a short clear summary (<=200 words)."
+                "Output a short clear summary."
             )
 
         # Prepare inputs with image + prompt
@@ -54,7 +53,7 @@ class BLIPSummarizer:
             # fallback: image-only captioning (shorter); often avoids echo/repetition
             cap_inputs = self.processor(images=image, return_tensors="pt").to(self.device)
             caption = self._generate_text(cap_inputs, max_new_tokens=80, num_beams=5, no_repeat_ngram_size=2)
-            return caption or "No summary generated."
+            return caption or "No summary generated"
 
         return generated_text
 
