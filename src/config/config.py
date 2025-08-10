@@ -1,7 +1,7 @@
 from pathlib import Path
 
 # Paths
-OUTPUT_DIR = Path("table_data")
+OUTPUT_DIR = Path("data/outputs/table_data")
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Weaviate configuration
@@ -10,3 +10,6 @@ WEAVIATE_API_KEY = "U1U3TkVDalVKOGxZQmdicV9TT2xWeElSS0IvK2dKTlJLTk1zYXFoSDVDWmdt
 
 # Class name for storing metadata
 WEAVIATE_CLASS = "PDFTableMetadata"
+
+# Multi modal model
+BLIP_MODEL = "Salesforce/blip-image-captioning-large"
