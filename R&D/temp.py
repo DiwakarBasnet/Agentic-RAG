@@ -12,11 +12,11 @@ import pandas as pd
 import numpy as np
 
 # LangChain imports
-from langchain.document_loaders import PyMuPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Weaviate
-from langchain.llms import HuggingFacePipeline
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Weaviate
+from langchain_community.llms import HuggingFacePipeline
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.schema import Document
@@ -97,7 +97,7 @@ class WeaviateVectorStore:
         try:
             if self.api_key:
                 auth_config = Auth.api_key(self.api_key)
-                self.client = weaviate.connect_to_wcs(
+                self.client = weaviate.connect_to_weaviate_cloud(
                     cluster_url=self.url,
                     auth_credentials=auth_config
                 )
@@ -210,7 +210,7 @@ class WeaviateVectorStore:
 class HuggingFaceEmbeddingModel:
     """Wrapper for Hugging Face embedding models."""
     
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         self.model_name = model_name
         self.embeddings = None
         
@@ -241,7 +241,7 @@ class HuggingFaceLLM:
     """Wrapper for Hugging Face language models"""
     
     def __init__(self, 
-                 model_name: str = "openai/gpt-oss-20b:fireworks-ai",
+                 model_name: str = "microsoft/DialoGPT-large",
                  max_new_tokens: int = 512,
                  temperature: float = 0.1):
         self.model_name = model_name
@@ -294,7 +294,7 @@ class SECRAGSystem:
                  weaviate_url: str = "https://548cae5wquiajhovivwljw.c0.asia-southeast1.gcp.weaviate.cloud",
                  weaviate_api_key: Optional[str] = "ZE1JQWhwU1MzMEZLZ2NoMF9vMmRLTERUejFaalRRRk5wZEhyM0FDZXJGeldUMUhNQVVhWXl2bVhXTzlVPV92MjAw",
                  embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
-                 llm_model: str = "openai/gpt-oss-20b:fireworks-ai"):
+                 llm_model: str = "microsoft/DialoGPT-large"):
         
         self.pdf_processor = SECPDFProcessor()
         self.vector_store = WeaviateVectorStore(weaviate_url, weaviate_api_key)
@@ -537,7 +537,7 @@ def main():
     rag_system = SECRAGSystem(
         weaviate_url="https://548cae5wquiajhovivwljw.c0.asia-southeast1.gcp.weaviate.cloud",  # Update with your Weaviate URL
         embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-        llm_model="openai/gpt-oss-20b:fireworks-ai"  # You might want to use a larger model
+        llm_model="microsoft/DialoGPT-large"  # You might want to use a larger model
     )
     
     # Initialize components
