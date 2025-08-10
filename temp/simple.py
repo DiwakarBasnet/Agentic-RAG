@@ -14,6 +14,12 @@ import uuid
 import os
 from pathlib import Path
 from unstructured.partition.pdf import partition_pdf
+import base64
+from PIL import Image
+import io
+import requests
+from openai import OpenAI
+import time
 
 
 def identify_potential_table_pages(pdf_path: str) -> List[int]:
@@ -177,58 +183,224 @@ def save_dataframes_to_files(table_info_list: List[Dict], pdf_path: str,
     return saved_files
 
 
-def create_table_metadata(table_info_list: List[Dict], pdf_path: str, 
-                         saved_files: List[str]) -> List[Dict]:
+def pdf_page_to_image(pdf_path: str, page_number: int, dpi: int = 150) -> Image.Image:
     """
-    Create metadata for tables without storing the actual DataFrame data.
+    Convert a PDF page to a PIL Image.
+    
+    Args:
+        pdf_path (str): Path to the PDF file
+        page_number (int): Page number (1-indexed)
+        dpi (int): Resolution for the image
+        
+    Returns:
+        PIL.Image: The page as an image
+    """
+    doc = fitz.open(pdf_path)
+    page = doc.load_page(page_number - 1)  # PyMuPDF uses 0-indexed pages
+    
+    # Convert to image
+    mat = fitz.Matrix(dpi / 72, dpi / 72)  # 72 is the default DPI
+    pix = page.get_pixmap(matrix=mat)
+    img_data = pix.tobytes("png")
+    
+    # Convert to PIL Image
+    image = Image.open(io.BytesIO(img_data))
+    doc.close()
+    
+    return image
+
+
+def encode_image_to_base64(image: Image.Image) -> str:
+    """
+    Encode PIL Image to base64 string.
+    
+    Args:
+        image (PIL.Image): The image to encode
+        
+    Returns:
+        str: Base64 encoded image
+    """
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    buffer.seek(0)
+    return base64.b64encode(buffer.read()).decode('utf-8')
+
+
+def summarize_page_with_multimodal_model(image: Image.Image, 
+                                       openai_api_key: str = None,
+                                       model_name: str = "gpt-4-vision-preview") -> str:
+    """
+    Summarize a PDF page using a multimodal model.
+    
+    Args:
+        image (PIL.Image): The page image
+        openai_api_key (str): OpenAI API key (if using OpenAI models)
+        model_name (str): Name of the multimodal model to use
+        
+    Returns:
+        str: Summary of the page content
+    """
+    try:
+        # For OpenAI GPT-4 Vision
+        if openai_api_key and "gpt-4" in model_name.lower():
+            return _summarize_with_openai_vision(image, openai_api_key, model_name)
+        
+        # For free alternatives, you can add other multimodal models here
+        # Example: Using a local model or free API
+        else:
+            return _summarize_with_free_model(image)
+    
+    except Exception as e:
+        print(f"Error in multimodal summarization: {e}")
+        return f"Error generating summary: {str(e)}"
+
+
+def _summarize_with_openai_vision(image: Image.Image, api_key: str, model_name: str) -> str:
+    """Summarize using OpenAI's GPT-4 Vision."""
+    client = OpenAI(api_key=api_key)
+    
+    # Encode image
+    base64_image = encode_image_to_base64(image)
+    
+    # Create the prompt
+    prompt = """Analyze this PDF page image and provide a detailed summary focusing on:
+1. Tables and data present (structure, content, key metrics)
+2. Charts, graphs, or visualizations
+3. Text content and key information
+4. Any financial, technical, or business insights
+5. Context about what this page represents
+
+Provide a comprehensive summary that would help someone understand what data or information is available on this page."""
+    
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        max_tokens=500
+    )
+    
+    return response.choices[0].message.content
+
+
+def _summarize_with_free_model(image: Image.Image) -> str:
+    """
+    Summarize using a free multimodal model.
+    
+    You can integrate free alternatives here such as:
+    - Hugging Face Transformers (BLIP, LLaVA)
+    - Local multimodal models
+    - Other free APIs
+    
+    For now, this is a placeholder that returns a basic description.
+    """
+    # Placeholder - replace with actual free multimodal model
+    # Example using Hugging Face BLIP:
+    
+    try:
+        # This is a simplified example - you would need to install transformers
+        # and implement the actual model inference
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+        
+        processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+        model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+        
+        inputs = processor(image, return_tensors="pt")
+        out = model.generate(**inputs, max_length=100)
+        caption = processor.decode(out[0], skip_special_tokens=True)
+        
+        return f"Page contains: {caption}. This appears to be a document page with structured data and text content."
+    
+    except ImportError:
+        # Fallback if transformers is not installed
+        return "Page contains structured data including tables and text content. Detailed analysis requires multimodal model setup."
+
+
+def create_page_summaries(pdf_path: str, page_numbers: List[int], 
+                         openai_api_key: str = None) -> Dict[int, str]:
+    """
+    Create summaries for each page using a multimodal model.
+    
+    Args:
+        pdf_path (str): Path to the PDF file
+        page_numbers (List[int]): List of page numbers to process
+        openai_api_key (str): OpenAI API key (optional)
+        
+    Returns:
+        Dict[int, str]: Dictionary mapping page numbers to summaries
+    """
+    page_summaries = {}
+    
+    print(f"Creating summaries for {len(page_numbers)} pages...")
+    
+    for page_num in page_numbers:
+        try:
+            print(f"  Processing page {page_num}...")
+            
+            # Convert PDF page to image
+            image = pdf_page_to_image(pdf_path, page_num)
+            
+            # Generate summary using multimodal model
+            summary = summarize_page_with_multimodal_model(
+                image, 
+                openai_api_key=openai_api_key
+            )
+            
+            page_summaries[page_num] = summary
+            print(f"    ✓ Generated summary for page {page_num}")
+            
+            # Add delay to avoid API rate limits
+            if openai_api_key:
+                time.sleep(1)
+                
+        except Exception as e:
+            print(f"    ✗ Error processing page {page_num}: {e}")
+            page_summaries[page_num] = f"Error generating summary for page {page_num}: {str(e)}"
+    
+    return page_summaries
+
+
+def create_simplified_metadata(table_info_list: List[Dict], pdf_path: str, 
+                              saved_files: List[str], 
+                              page_summaries: Dict[int, str]) -> List[Dict]:
+    """
+    Create simplified metadata containing only summary and CSV file reference.
     
     Args:
         table_info_list (List[Dict]): List of table information dictionaries
         pdf_path (str): Original PDF file path
         saved_files (List[str]): List of saved CSV file paths
+        page_summaries (Dict[int, str]): Dictionary of page summaries
         
     Returns:
-        List[Dict]: List of dictionaries containing table metadata
+        List[Dict]: List of dictionaries containing minimal metadata
     """
     metadata_list = []
     
     for i, table_info in enumerate(table_info_list):
-        df = table_info['dataframe']
         page_num = table_info['page_number']
         method = table_info['extraction_method']
         
-        # Create sample text representation (first few rows)
-        sample_text_parts = []
-        
-        if not df.empty:
-            # Convert column names to strings (fix for Weaviate text array requirement)
-            column_names = [str(col) for col in df.columns]
-            
-            # Add column headers
-            headers = " | ".join(column_names)
-            sample_text_parts.append(f"Headers: {headers}")
-            
-            # Add first 3 rows as sample
-            sample_rows = min(3, len(df))
-            for idx in range(sample_rows):
-                row_text = " | ".join([str(val) for val in df.iloc[idx].values])
-                sample_text_parts.append(f"Row {idx+1}: {row_text}")
-        
-        sample_text = "\n".join(sample_text_parts)
+        # Get the summary for this page
+        page_summary = page_summaries.get(page_num, "No summary available")
         
         metadata = {
             'table_id': f"{Path(pdf_path).stem}_page{page_num}_table{i+1}_{method}",
-            'source_file': pdf_path,
-            'page_number': page_num,
-            'table_index': i,
-            'extraction_method': method,
             'csv_file_path': saved_files[i] if i < len(saved_files) else None,
-            'shape': df.shape,
-            'columns': [str(col) for col in df.columns],  # Ensure all columns are strings
-            'row_count': len(df),
-            'column_count': len(df.columns),
-            'sample_text': sample_text,
-            'parsing_report': table_info.get('parsing_report'),
+            'page_summary': page_summary,
+            'page_number': page_num,
+            'source_file': Path(pdf_path).name,
             'created_at': pd.Timestamp.now().isoformat()
         }
         metadata_list.append(metadata)
@@ -236,12 +408,12 @@ def create_table_metadata(table_info_list: List[Dict], pdf_path: str,
     return metadata_list
 
 
-def create_embeddings(metadata_list: List[Dict], model_name: str = 'all-MiniLM-L6-v2') -> List[Dict]:
+def create_summary_embeddings(metadata_list: List[Dict], model_name: str = 'all-MiniLM-L6-v2') -> List[Dict]:
     """
-    Create semantic embeddings for table metadata.
+    Create embeddings from page summaries.
     
     Args:
-        metadata_list (List[Dict]): List of table metadata
+        metadata_list (List[Dict]): List of metadata dictionaries
         model_name (str): Name of the sentence transformer model
         
     Returns:
@@ -250,11 +422,11 @@ def create_embeddings(metadata_list: List[Dict], model_name: str = 'all-MiniLM-L
     model = SentenceTransformer(model_name)
     
     for metadata in metadata_list:
-        # Create embedding text from metadata
-        embedding_text = f"Table from {metadata['source_file']} page {metadata['page_number']}. {metadata['sample_text']}"
+        # Create embedding from the page summary
+        summary_text = metadata['page_summary']
         
         # Create embedding
-        embedding = model.encode(embedding_text)
+        embedding = model.encode(summary_text)
         
         # Add embedding to metadata
         metadata['embedding'] = embedding.tolist()
@@ -287,29 +459,23 @@ def setup_weaviate_client() -> weaviate.WeaviateClient:
         raise
 
 
-def create_weaviate_schema(client: weaviate.WeaviateClient, class_name: str = "PDFTableMetadata") -> None:
-    """Create Weaviate schema for storing PDF table metadata only."""
+def create_simplified_weaviate_schema(client: weaviate.WeaviateClient, class_name: str = "PDFTableSummary") -> None:
+    """Create simplified Weaviate schema for storing page summaries and CSV references."""
     
     # Delete collection if it exists
     if client.collections.exists(class_name):
         client.collections.delete(class_name)
     
-    # Create collection with schema
+    # Create collection with simplified schema
     client.collections.create(
         name=class_name,
-        description="PDF table metadata with embeddings",
+        description="PDF page summaries with CSV table references",
         properties=[
             Property(name="table_id", data_type=DataType.TEXT, description="Unique identifier for the table"),
-            Property(name="source_file", data_type=DataType.TEXT, description="Source PDF file path"),
-            Property(name="page_number", data_type=DataType.INT, description="Page number in the PDF"),
-            Property(name="table_index", data_type=DataType.INT, description="Index of table on the page"),
-            Property(name="extraction_method", data_type=DataType.TEXT, description="Method used to extract table (lattice/stream)"),
             Property(name="csv_file_path", data_type=DataType.TEXT, description="Path to saved CSV file"),
-            Property(name="shape", data_type=DataType.TEXT, description="Shape of the DataFrame (rows, columns)"),
-            Property(name="columns", data_type=DataType.TEXT_ARRAY, description="Column names of the DataFrame"),
-            Property(name="row_count", data_type=DataType.INT, description="Number of rows in the table"),
-            Property(name="column_count", data_type=DataType.INT, description="Number of columns in the table"),
-            Property(name="sample_text", data_type=DataType.TEXT, description="Sample text representation of the table"),
+            Property(name="page_summary", data_type=DataType.TEXT, description="Multimodal model summary of the page"),
+            Property(name="page_number", data_type=DataType.INT, description="Page number in the PDF"),
+            Property(name="source_file", data_type=DataType.TEXT, description="Source PDF file name"),
             Property(name="embedding_model", data_type=DataType.TEXT, description="Model used for creating embeddings"),
             Property(name="created_at", data_type=DataType.TEXT, description="Timestamp when the data was created")
         ],
@@ -317,30 +483,24 @@ def create_weaviate_schema(client: weaviate.WeaviateClient, class_name: str = "P
     )
 
 
-def store_metadata_in_weaviate(client: weaviate.WeaviateClient, metadata_with_embeddings: List[Dict], 
-                              class_name: str = "PDFTableMetadata") -> List[str]:
-    """Store table metadata and embeddings in Weaviate."""
+def store_summaries_in_weaviate(client: weaviate.WeaviateClient, metadata_with_embeddings: List[Dict], 
+                               class_name: str = "PDFTableSummary") -> List[str]:
+    """Store simplified metadata with summaries and embeddings in Weaviate."""
     
     collection = client.collections.get(class_name)
     object_ids = []
     
-    print(f"Attempting to store {len(metadata_with_embeddings)} objects...")
+    print(f"Storing {len(metadata_with_embeddings)} summary objects...")
     
     for i, metadata in enumerate(metadata_with_embeddings):
         try:
-            # Prepare metadata object (excluding the embedding and dataframe)
+            # Prepare data object
             data_object = {
                 "table_id": metadata['table_id'],
-                "source_file": metadata['source_file'],
-                "page_number": metadata['page_number'],
-                "table_index": metadata['table_index'],
-                "extraction_method": metadata['extraction_method'],
                 "csv_file_path": metadata['csv_file_path'],
-                "shape": f"{metadata['shape'][0]}x{metadata['shape'][1]}",
-                "columns": metadata['columns'],
-                "row_count": metadata['row_count'],
-                "column_count": metadata['column_count'],
-                "sample_text": metadata['sample_text'],
+                "page_summary": metadata['page_summary'],
+                "page_number": metadata['page_number'],
+                "source_file": metadata['source_file'],
                 "embedding_model": metadata['embedding_model'],
                 "created_at": metadata['created_at']
             }
@@ -356,108 +516,16 @@ def store_metadata_in_weaviate(client: weaviate.WeaviateClient, metadata_with_em
             
         except Exception as e:
             print(f"  ✗ Error storing object {i+1}: {e}")
-            print(f"    Table ID: {metadata.get('table_id', 'Unknown')}")
             continue
-    
-    # Verify objects were actually stored
-    try:
-        total_objects = collection.aggregate.over_all(total_count=True)
-        print(f"Collection now contains {total_objects.total_count} total objects")
-    except Exception as e:
-        print(f"Could not verify object count: {e}")
     
     return object_ids
 
 
-def debug_weaviate_connection(client: weaviate.WeaviateClient) -> None:
-    """Debug function to check Weaviate connection and collections."""
-    try:
-        print("\n=== WEAVIATE DEBUG INFO ===")
-        
-        # Check if client is ready
-        print(f"Client ready: {client.is_ready()}")
-        
-        # List all collections
-        collections = client.collections.list_all()
-        print(f"Available collections: {[c.name for c in collections]}")
-        
-        # Check if our collection exists and get details
-        class_name = "PDFTableMetadata"
-        if client.collections.exists(class_name):
-            collection = client.collections.get(class_name)
-            
-            # Get collection info
-            config = collection.config.get()
-            print(f"Collection '{class_name}' exists")
-            print(f"Collection properties: {[p.name for p in config.properties]}")
-            
-            # Get object count
-            try:
-                result = collection.aggregate.over_all(total_count=True)
-                print(f"Object count: {result.total_count}")
-                
-                # Try to fetch first few objects if any exist
-                if result.total_count > 0:
-                    objects = collection.query.fetch_objects(limit=3)
-                    print(f"Sample objects: {len(objects.objects)} found")
-                    for obj in objects.objects[:2]:  # Show first 2
-                        print(f"  - ID: {obj.uuid}")
-                        print(f"    table_id: {obj.properties.get('table_id', 'N/A')}")
-            except Exception as e:
-                print(f"Error getting object count: {e}")
-                
-        else:
-            print(f"Collection '{class_name}' does not exist")
-            
-        print("=== END DEBUG INFO ===\n")
-        
-    except Exception as e:
-        print(f"Debug error: {e}")
-
-
-def test_simple_insert(client: weaviate.WeaviateClient) -> bool:
-    """Test inserting a simple object to verify Weaviate is working."""
-    try:
-        class_name = "PDFTableMetadata"
-        collection = client.collections.get(class_name)
-        
-        # Create a simple test object
-        test_object = {
-            "table_id": "test_table_123",
-            "source_file": "test.pdf",
-            "page_number": 1,
-            "table_index": 0,
-            "extraction_method": "test",
-            "csv_file_path": "test.csv",
-            "shape": "2x3",
-            "columns": ["col1", "col2", "col3"],
-            "row_count": 2,
-            "column_count": 3,
-            "sample_text": "Test table data",
-            "embedding_model": "test-model",
-            "created_at": pd.Timestamp.now().isoformat()
-        }
-        
-        # Create a dummy embedding vector (384 dimensions for all-MiniLM-L6-v2)
-        test_embedding = [0.0] * 384
-        
-        # Insert test object
-        object_id = collection.data.insert(
-            properties=test_object,
-            vector=test_embedding
-        )
-        
-        print(f"✓ Test insert successful. Object ID: {object_id}")
-        return True
-        
-    except Exception as e:
-        print(f"✗ Test insert failed: {e}")
-        return False
-def search_similar_tables(client: weaviate.WeaviateClient, query_text: str, 
-                         model_name: str = 'all-MiniLM-L6-v2', 
-                         class_name: str = "PDFTableMetadata", 
-                         limit: int = 5) -> List[Dict]:
-    """Search for similar tables using semantic similarity."""
+def search_tables_by_summary(client: weaviate.WeaviateClient, query_text: str, 
+                           model_name: str = 'all-MiniLM-L6-v2', 
+                           class_name: str = "PDFTableSummary", 
+                           limit: int = 5) -> List[Dict]:
+    """Search for tables using semantic similarity on page summaries."""
     
     try:
         # Create embedding for the query
@@ -473,10 +541,9 @@ def search_similar_tables(client: weaviate.WeaviateClient, query_text: str,
             return_metadata=MetadataQuery(certainty=True, distance=True)
         )
         
-        # Format results with proper metadata handling
+        # Format results
         results = []
         for obj in response.objects:
-            # Handle metadata properly - it's an object, not a dict
             metadata_dict = {}
             if hasattr(obj.metadata, 'certainty'):
                 metadata_dict['certainty'] = obj.metadata.certainty
@@ -497,15 +564,39 @@ def search_similar_tables(client: weaviate.WeaviateClient, query_text: str,
         return []
 
 
-def process_pdf_pipeline(pdf_path: str, output_dir: str = "table_data", 
-                        embedding_model: str = 'all-MiniLM-L6-v2') -> List[str]:
+def load_csv_from_search_result(csv_file_path: str) -> pd.DataFrame:
     """
-    Complete pipeline to process PDF using unstructured elements detection and store metadata in Weaviate.
+    Load the CSV file referenced in search results.
+    
+    Args:
+        csv_file_path (str): Path to the CSV file
+        
+    Returns:
+        pd.DataFrame: The loaded CSV data
+    """
+    try:
+        if os.path.exists(csv_file_path):
+            return pd.read_csv(csv_file_path)
+        else:
+            print(f"CSV file not found: {csv_file_path}")
+            return pd.DataFrame()
+    except Exception as e:
+        print(f"Error loading CSV: {e}")
+        return pd.DataFrame()
+
+
+def process_pdf_with_multimodal_pipeline(pdf_path: str, 
+                                        output_dir: str = "table_data", 
+                                        embedding_model: str = 'all-MiniLM-L6-v2',
+                                        openai_api_key: str = None) -> List[str]:
+    """
+    Complete pipeline with multimodal page summarization.
     
     Args:
         pdf_path (str): Path to PDF file
         output_dir (str): Directory to save CSV files
         embedding_model (str): Embedding model name
+        openai_api_key (str): OpenAI API key for GPT-4 Vision (optional)
         
     Returns:
         List[str]: List of created object IDs in Weaviate
@@ -513,16 +604,16 @@ def process_pdf_pipeline(pdf_path: str, output_dir: str = "table_data",
     client = None
     
     try:
-        print(f"Processing PDF: {pdf_path}")
+        print(f"Processing PDF with multimodal pipeline: {pdf_path}")
         
-        # Step 1: Identify potential table pages using unstructured
+        # Step 1: Identify potential table pages
         potential_pages = identify_potential_table_pages(pdf_path)
         
         if not potential_pages:
             print("No potential table pages found")
             return []
         
-        # Step 2: Extract tables from potential pages using both Camelot flavors
+        # Step 2: Extract tables from pages
         all_tables = extract_tables_from_pages(pdf_path, potential_pages)
         
         if not all_tables:
@@ -535,33 +626,22 @@ def process_pdf_pipeline(pdf_path: str, output_dir: str = "table_data",
         saved_files = save_dataframes_to_files(all_tables, pdf_path, output_dir)
         print(f"Saved {len(saved_files)} CSV files to {output_dir}")
         
-        # Step 4: Create metadata
-        metadata_list = create_table_metadata(all_tables, pdf_path, saved_files)
+        # Step 4: Create page summaries using multimodal model
+        page_summaries = create_page_summaries(pdf_path, potential_pages, openai_api_key)
+        print(f"Generated summaries for {len(page_summaries)} pages")
         
-        # Step 5: Create embeddings
-        metadata_with_embeddings = create_embeddings(metadata_list, embedding_model)
+        # Step 5: Create simplified metadata with summaries
+        metadata_list = create_simplified_metadata(all_tables, pdf_path, saved_files, page_summaries)
         
-        # Step 6: Setup Weaviate and store metadata
+        # Step 6: Create embeddings from summaries
+        metadata_with_embeddings = create_summary_embeddings(metadata_list, embedding_model)
+        
+        # Step 7: Setup Weaviate and store metadata
         client = setup_weaviate_client()
+        create_simplified_weaviate_schema(client)
+        object_ids = store_summaries_in_weaviate(client, metadata_with_embeddings)
         
-        # Debug the connection
-        debug_weaviate_connection(client)
-        
-        create_weaviate_schema(client)
-        
-        # Test simple insert first
-        if test_simple_insert(client):
-            print("Basic insertion test passed, proceeding with actual data...")
-        else:
-            print("Basic insertion test failed, there may be a connection issue")
-            return []
-        
-        object_ids = store_metadata_in_weaviate(client, metadata_with_embeddings)
         print(f"Stored metadata for {len(object_ids)} tables in Weaviate")
-        
-        # Final verification
-        debug_weaviate_connection(client)
-        
         return object_ids
     
     except Exception as e:
@@ -573,35 +653,100 @@ def process_pdf_pipeline(pdf_path: str, output_dir: str = "table_data",
             client.close()
 
 
-# Example usage
-if __name__ == "__main__":
-    pdf_file_path = "pdf_input.pdf"
+def search_and_retrieve_tables(query_text: str, 
+                             embedding_model: str = 'all-MiniLM-L6-v2',
+                             limit: int = 3) -> List[Dict]:
+    """
+    Search for relevant tables and return both summaries and CSV data.
+    
+    Args:
+        query_text (str): Query text to search for
+        embedding_model (str): Embedding model name
+        limit (int): Maximum number of results
+        
+    Returns:
+        List[Dict]: List of search results with CSV data loaded
+    """
     client = None
     
     try:
-        # Process PDF
-        object_ids = process_pdf_pipeline(pdf_file_path)
-        print(f"Created {len(object_ids)} objects in Weaviate")
-        
-        # Debug connection and verify data
+        # Setup Weaviate client
         client = setup_weaviate_client()
-        debug_weaviate_connection(client)
         
-        # Example search
-        results = search_similar_tables(client, "financial data revenue")
+        # Search using summaries
+        search_results = search_tables_by_summary(client, query_text, embedding_model, limit=limit)
         
-        print("\nSearch results:")
-        for result in results:
+        # Load CSV data for each result
+        enhanced_results = []
+        
+        for result in search_results:
             props = result['properties']
-            print(f"Table: {props['table_id']}")
-            print(f"Page: {props['page_number']}, Method: {props['extraction_method']}")
-            print(f"CSV: {props['csv_file_path']}")
-            print(f"Shape: {props['shape']}, Certainty: {result['metadata']['certainty']:.3f}")
-            print("---")
+            csv_path = props['csv_file_path']
+            
+            # Load the CSV data
+            csv_data = load_csv_from_search_result(csv_path)
+            
+            enhanced_result = {
+                'table_id': props['table_id'],
+                'page_summary': props['page_summary'],
+                'csv_file_path': csv_path,
+                'page_number': props['page_number'],
+                'source_file': props['source_file'],
+                'csv_data': csv_data,
+                'search_certainty': result['metadata'].get('certainty', 0),
+                'search_distance': result['metadata'].get('distance', 1)
+            }
+            
+            enhanced_results.append(enhanced_result)
         
+        return enhanced_results
+    
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error in search and retrieval: {e}")
+        return []
     
     finally:
         if client:
             client.close()
+
+
+# Example usage
+if __name__ == "__main__":
+    pdf_file_path = "pdf_input.pdf"
+    openai_api_key = None
+    
+    try:
+        # Process PDF with multimodal pipeline
+        object_ids = process_pdf_with_multimodal_pipeline(
+            pdf_file_path, 
+            openai_api_key=openai_api_key
+        )
+        print(f"Created {len(object_ids)} objects in Weaviate")
+        
+        # Example search and retrieval
+        query = "financial revenue data quarterly results"
+        results = search_and_retrieve_tables(query, limit=3)
+        
+        print(f"\nSearch results for: '{query}'")
+        print("=" * 50)
+        
+        for i, result in enumerate(results, 1):
+            print(f"\nResult {i}:")
+            print(f"Table ID: {result['table_id']}")
+            print(f"Source: {result['source_file']} (Page {result['page_number']})")
+            print(f"Certainty: {result['search_certainty']:.3f}")
+            print(f"CSV Path: {result['csv_file_path']}")
+            print(f"Summary: {result['page_summary'][:200]}...")
+            
+            # Show CSV data preview
+            if not result['csv_data'].empty:
+                print(f"CSV Shape: {result['csv_data'].shape}")
+                print("CSV Preview:")
+                print(result['csv_data'].head(3).to_string())
+            else:
+                print("No CSV data available")
+            
+            print("-" * 30)
+        
+    except Exception as e:
+        print(f"Error: {e}")
