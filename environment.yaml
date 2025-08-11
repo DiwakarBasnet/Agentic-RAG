@@ -1,0 +1,5 @@
+name: rag
+channels:
+  - defaults
+dependencies:
+  - python=3.12.11
